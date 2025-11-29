@@ -29,18 +29,18 @@ ATOMIC_MASSES = {
 
 # Pseudopotential and orbital file names
 PP_FILES = {
-    'H': 'H_ONCV_PBE-1.2.upf',
+    'H': 'H_ONCV_PBE-1.0.upf',
     'C': 'C_ONCV_PBE-1.0.upf',
     'N': 'N_ONCV_PBE-1.0.upf',
-    'O': 'O_ONCV_PBE-1.2.upf',
+    'O': 'O_ONCV_PBE-1.0.upf',
     'S': 'S_ONCV_PBE-1.0.upf',
 }
 
 ORB_FILES = {
-    'H': 'H_gga_8au_100Ry_2s1p.orb',
-    'C': 'C_gga_8au_100Ry_2s2p1d.orb',
-    'N': 'N_pbe_6.0au_50Ry_2s2p1d.orb',
-    'O': 'O_gga_6au_60Ry_2s2p1d.orb',
+    'H': 'H_gga_6au_100Ry_2s1p.orb',
+    'C': 'C_gga_7au_100Ry_2s2p1d.orb',
+    'N': 'N_gga_7au_100Ry_2s2p1d.orb',
+    'O': 'O_gga_7au_100Ry_2s2p1d.orb',
     'S': None,
 }
 
@@ -124,8 +124,17 @@ def generate_stru_file(elements, coords, output_file, box_size=20.0):
                 f.write(f"{x:12.6f} {y:12.6f} {z:12.6f} 1 1 1\n")
 
 
-def generate_input_file(output_file, ntype, calculation='md', md_nstep=10):
-    """Generate ABACUS INPUT file."""
+def generate_input_file(output_file, ntype, calculation='md', md_nstep=10, md_restart=None):
+    """
+    Generate ABACUS INPUT file.
+    
+    If md_restart is None, automatically detects if restart files exist.
+    """
+    # Auto-detect restart if not specified
+    if md_restart is None:
+        output_dir = Path(output_file).parent
+        restart_file = output_dir / "OUT.ABACUS" / "Restart_md.dat"
+        md_restart = 1 if restart_file.exists() else 0
     with open(output_file, 'w') as f:
         f.write("INPUT_PARAMETERS\n\n")
         f.write("#Parameters (1.General)\n")
@@ -153,7 +162,7 @@ def generate_input_file(output_file, ntype, calculation='md', md_nstep=10):
             f.write(f"md_nstep                {md_nstep}\n")
             f.write("md_type                 nvt\n")
             f.write("md_tfirst               300\n")
-            f.write("md_restart              0\n")
+            f.write(f"md_restart              {md_restart}\n")
             f.write("md_dumpfreq             1\n")
             f.write("out_stru                1\n")
             f.write("dump_force              1\n")
@@ -196,8 +205,8 @@ def prepare_abacus_inputs(conformations_dir, output_dir, pp_dir=None, calculatio
     output_path = Path(output_dir)
     output_path.mkdir(parents=True, exist_ok=True)
     
-    # Find all PDB files
-    pdb_files = sorted(conf_path.glob("*.pdb"))
+    # Find all PDB files (recursively, in case conformations are in fragment subdirectories)
+    pdb_files = sorted(conf_path.rglob("*.pdb"))
     if not pdb_files:
         print(f"Error: No PDB files found in {conf_path}")
         return
@@ -253,7 +262,7 @@ def prepare_abacus_inputs(conformations_dir, output_dir, pp_dir=None, calculatio
         # Generate STRU file
         generate_stru_file(elements, coords, conf_dir / "STRU")
         
-        # Generate INPUT file
+        # Generate INPUT file (auto-detect restart if previous run exists)
         generate_input_file(conf_dir / "INPUT", ntype, calculation, md_nstep)
         
         # Generate KPT file
