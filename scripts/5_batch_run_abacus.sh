@@ -1,5 +1,14 @@
 #!/bin/bash
 # Batch script to run ABACUS calculations on multiple conformations using Docker
+#
+# Optimized defaults for Mac Mini M4:
+#   - M4 base: 10 cores (4 performance + 6 efficiency)
+#   - M4 Pro:  14 cores (10 performance + 4 efficiency)
+#   - M4 Max:  16 cores (12 performance + 4 efficiency)
+#
+# Recommended settings:
+#   MPI_PROCS=8, OMP_NUM_THREADS=1 (best for most ABACUS calculations)
+#   Total cores used = MPI × OMP = 8 (leaves headroom for system)
 
 set -e
 
@@ -20,6 +29,7 @@ MPI_ARG="${3:-}"
 OMP_ARG="${4:-}"
 
 # Set MPI processes (argument > env var > default)
+# Default: 8 for Mac Mini M4 (uses 8 of 10 cores)
 if [ -n "$MPI_ARG" ]; then
     export MPI_PROCS="$MPI_ARG"
 else
@@ -27,12 +37,13 @@ else
 fi
 
 # Set OpenMP threads (argument > env var > default)
+# Default: 1 (MPI scales better than OpenMP for ABACUS)
 if [ -n "$OMP_ARG" ]; then
     export OMP_NUM_THREADS="$OMP_ARG"
     OMP_THREADS="$OMP_ARG"
 else
-    export OMP_NUM_THREADS=${OMP_NUM_THREADS:-1}
-    OMP_THREADS=${OMP_NUM_THREADS:-1}
+    export OMP_NUM_THREADS=${OMP_NUM_THREADS:-2}
+    OMP_THREADS=${OMP_NUM_THREADS:-2}
 fi
 
 # Limit number of conformations if specified
@@ -71,8 +82,8 @@ fi
 echo "=========================================="
 echo ""
 
-# Find all conformation directories (directories with INPUT file)
-CONF_DIRS=($(find "$BASE_DIR" -type f -name "INPUT" -exec dirname {} \; | sort))
+# Find all conformation directories (directories with INPUT file, excluding OUT.ABACUS)
+CONF_DIRS=($(find "$BASE_DIR" -type f -name "INPUT" -not -path "*/OUT.ABACUS/*" -exec dirname {} \; | sort))
 
 if [ ${#CONF_DIRS[@]} -eq 0 ]; then
     echo "Error: No INPUT files found in $BASE_DIR"
@@ -94,11 +105,29 @@ fi
 TOTAL=${#CONF_DIRS[@]}
 SUCCESS=0
 FAILED=0
+SKIPPED=0
 
 echo "Found $TOTAL conformations to process"
 echo ""
 echo "Note: Running with caffeinate to prevent system sleep"
+echo "Note: Already completed simulations will be skipped"
 echo ""
+
+# Function to check if simulation is already complete
+is_simulation_complete() {
+    local conf_dir="$1"
+    local log_file="$conf_dir/OUT.ABACUS/running_md.log"
+    local md_dump="$conf_dir/OUT.ABACUS/MD_dump"
+    
+    # Check if MD_dump exists AND log file shows completion
+    if [ -f "$md_dump" ] && [ -f "$log_file" ]; then
+        # Check for "Finish Time" or "Total  Time" in the last 50 lines
+        if tail -50 "$log_file" 2>/dev/null | grep -q "Finish Time\|Total  Time"; then
+            return 0  # Complete
+        fi
+    fi
+    return 1  # Not complete
+}
 
 # Run ABACUS on each conformation
 for i in "${!CONF_DIRS[@]}"; do
@@ -112,6 +141,14 @@ for i in "${!CONF_DIRS[@]}"; do
     if [ ! -f "$conf_dir/INPUT" ]; then
         echo "  ✗ Skipping: No INPUT file found"
         FAILED=$((FAILED + 1))
+        continue
+    fi
+    
+    # Check if simulation is already complete
+    if is_simulation_complete "$conf_dir"; then
+        echo "  ⏭ Skipping: Already completed (MD_dump + Finish Time found)"
+        SKIPPED=$((SKIPPED + 1))
+        SUCCESS=$((SUCCESS + 1))
         continue
     fi
     
@@ -150,7 +187,9 @@ echo "=========================================="
 echo "Summary:"
 echo "  Total: $TOTAL"
 echo "  Success: $SUCCESS"
+echo "  Skipped (already done): $SKIPPED"
 echo "  Failed: $FAILED"
+echo "  New completions: $((SUCCESS - SKIPPED))"
 echo "=========================================="
 
 if [ $FAILED -eq 0 ]; then
